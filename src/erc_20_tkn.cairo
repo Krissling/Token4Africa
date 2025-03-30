@@ -1,36 +1,109 @@
+// SPDX-License-Identifier: MIT
+// Compatible with OpenZeppelin Contracts for Cairo ^1.0.0
 use starknet::ContractAddress;
+#[starknet::interface]
+pub trait IMintable<ContractState> {
+    fn mint(ref self: ContractState, recipient: ContractAddress, amount: u256);
+}
 
 #[starknet::interface]
-trait IERC_20<T> {
-    fn name(self: @TConttactState) -> ByteArray;
-    fn symbol(self: @TConttactState) -> ByteArray;
-    fn decimals(self: @TConttactState) -> u8;
-    fn total_supply(self: @TConttactState) -> u256;
-    fn balanceOf(self: @TConttactState, _account: ContractAddress) -> u256;
-    fn approve(ref self: @TConttactState, _spender: ContractAddress, _amount: u256) -> bool;
-    fn allowance(ref self: @TConttactState, _owner: ContractAddress, _spender: ContractAddress) -> u256;
-    fn transfer(ref self: @TConttactState, _recipient: ContractAddress, _amount: u256) -> bool;
-    fn transferFrom(ref self: @TConttactState, _sender: ContractAddress, _recipient: ContractAddress, _amount: u256) -> bool; 
-    fn mint(ref self: @TConttactState, _recipient: ContractAddress, _amount: u256) -> u256;
-    fn burn(ref self: @TConttactState, _recipient: ContractAddress, _amount: u256);
+pub trait IBurnable<ContractState> {
+    fn burn(ref self: ContractState, amount: u256);
 }
 
 #[starknet::contract]
-mod erc20Contract {
-    use starknet::ContractAddress;
+pub mod MusicStrk {
+    use openzeppelin::access::ownable::OwnableComponent;
+    use openzeppelin::token::erc20::{ERC20Component, ERC20HooksEmptyImpl};
+    use openzeppelin::upgrades::interface::IUpgradeable;
+    use openzeppelin::upgrades::UpgradeableComponent;
+    use starknet::{ClassHash, ContractAddress, get_caller_address};
+
+    use super::{IBurnable, IMintable};
+
+    component!(path: ERC20Component, storage: erc20, event: ERC20Event);
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+
+    // External
+    #[abi(embed_v0)]
+    impl ERC20MixinImpl = ERC20Component::ERC20MixinImpl<ContractState>;
+    #[abi(embed_v0)]
+    impl OwnableMixinImpl = OwnableComponent::OwnableMixinImpl<ContractState>;
+
+    // Internal
+    impl ERC20InternalImpl = ERC20Component::InternalImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+    impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
-        owner: ContractAddress,
-        name: ByteArray,
-        symbol: ByteArray,
-        decimals: u8,
-        total_supply: u256,
-        balances: LagacyMap::<ContractAddress, u256>,
+        #[substorage(v0)]
+        erc20: ERC20Component::Storage,
+        #[substorage(v0)]
+        ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
     }
 
-    #[contructor]
-    fn constructor(ref self: ContractState, _name: ByteArray, _symbol: ByteArray, _decimals: u8) {
-        
+    #[event]
+    #[derive(Drop, starknet::Event)]
+    pub enum Event {
+        MintEvent: MintEvent,
+        BurnEvent: BurnEvent,
+        #[flat]
+        ERC20Event: ERC20Component::Event,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct MintEvent {
+        pub recipient: ContractAddress,
+        pub amount: u256,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct BurnEvent {
+        pub from: ContractAddress,
+        pub amount: u256,
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, owner: ContractAddress) {
+        self.erc20.initializer("MusicStrk", "MSTRK");
+        self.ownable.initializer(owner);
+    }
+
+    #[abi(embed_v0)]
+    impl MintableImpl of IMintable<ContractState> {
+        fn mint(ref self: ContractState, recipient: ContractAddress, amount: u256) {
+            self.ownable.assert_only_owner();
+            self.erc20.mint(recipient, amount);
+            self.emit(MintEvent { recipient, amount });
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl BurnableImpl of IBurnable<ContractState> {
+        fn burn(ref self: ContractState, amount: u256) {
+            let burner = get_caller_address();
+            self.ownable.assert_only_owner();
+            self.erc20.burn(burner, amount);
+            self.emit(BurnEvent { from: burner, amount });
+        }
+    }
+    //
+    // Upgradeable
+    //
+
+    #[abi(embed_v0)]
+    impl UpgradeableImpl of IUpgradeable<ContractState> {
+        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self.ownable.assert_only_owner();
+            self.upgradeable.upgrade(new_class_hash);
+        }
     }
 }
